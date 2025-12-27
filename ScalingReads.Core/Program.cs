@@ -13,10 +13,9 @@ var replicaCs = builder.Configuration.GetConnectionString("ReplicaConnection");
 // Usado para: Migrations, Inserts, Updates, Deletes.
 builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(masterCs));
 
-// 3. Registro do DbContext de LEITURA (R�plicas - Portas 5433 e 5434)
-// O Npgsql far� o balanceamento entre as duas portas automaticamente.
+// 3. Registro do DbContext de LEITURA (Réplicas - Portas 5433 e 5434)
+// O Npgsql fará o balanceamento entre as duas portas automaticamente.
 builder.Services.AddDbContext<ReadOnlyDbContext>(options => options.UseNpgsql(replicaCs));
-
 
 builder.Services.AddStackExchangeRedisCache(options =>
 {
@@ -43,7 +42,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c =>
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "ScalingReads API v1");
-        c.RoutePrefix = "swagger"; // Makes Swagger UI available at /swagger
+        c.RoutePrefix = "swagger";
     });
 }
 

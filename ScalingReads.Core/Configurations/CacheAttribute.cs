@@ -9,21 +9,11 @@ using System.Text.Json;
 namespace ScalingReads.Core.Configurations;
 
 [AttributeUsage(AttributeTargets.Method)]
-public class CacheAttribute : Attribute, IAsyncActionFilter
+public class CacheAttribute(int ttlSeconds = 60) : Attribute, IAsyncActionFilter
 {
-    private readonly int _ttlSeconds;
-
-    public CacheAttribute(int ttlSeconds = 60)
+    public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
-        _ttlSeconds = ttlSeconds;
-    }
-
-    public async Task OnActionExecutionAsync(
-        ActionExecutingContext context,
-        ActionExecutionDelegate next)
-    {
-        var cache = context.HttpContext.RequestServices
-            .GetRequiredService<IDistributedCache>();
+        var cache = context.HttpContext.RequestServices.GetRequiredService<IDistributedCache>();
 
         var cacheKey = BuildCacheKey(context);
 
@@ -38,8 +28,7 @@ public class CacheAttribute : Attribute, IAsyncActionFilter
 
         var executed = await next();
 
-        if (executed.Result is ObjectResult objectResult &&
-            objectResult.Value is not null)
+        if (executed.Result is ObjectResult objectResult && objectResult.Value is not null)
         {
             var data = JsonSerializer.Serialize(objectResult.Value);
 
@@ -49,25 +38,18 @@ public class CacheAttribute : Attribute, IAsyncActionFilter
                 new DistributedCacheEntryOptions
                 {
                     AbsoluteExpirationRelativeToNow =
-                        TimeSpan.FromSeconds(_ttlSeconds)
+                        TimeSpan.FromSeconds(ttlSeconds)
                 });
         }
     }
 
-
     private static string BuildCacheKey(ActionExecutingContext context)
     {
-        // Rota / path da requisição
         var route = context.HttpContext.Request.Path.Value ?? "";
 
-        // Tenta obter MethodInfo do controller
         if (context.ActionDescriptor is not ControllerActionDescriptor controllerAction)
-        {
-            // fallback simples serializando só path
             return $"endpoint:{route}";
-        }
 
-        // Filtramos só parâmetros relevantes (não [FromServices])
         var relevantArgs = new Dictionary<string, object?>();
 
         foreach (var param in controllerAction.MethodInfo.GetParameters())

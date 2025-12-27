@@ -631,7 +631,7 @@ FROM pg_stat_replication;
 
 - **Connection Pooling**: Npgsql automatically pools connections
 - **No-Tracking Queries**: ReadOnlyDbContext disables change tracking
-- **Strategic Caching**: Cache frequently accessed data with appropriate TTL
+- **Strategic Caching**: Cache frequently accessed data with appropriate TTL (Time-to-live)
 - **Index Optimization**: Ensure proper indexes on frequently queried columns
 
 ### Scaling Further

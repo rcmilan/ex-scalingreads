@@ -13,8 +13,8 @@ var replicaCs = builder.Configuration.GetConnectionString("ReplicaConnection");
 // Usado para: Migrations, Inserts, Updates, Deletes.
 builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(masterCs));
 
-// 3. Registro do DbContext de LEITURA (Réplicas - Portas 5433 e 5434)
-// O Npgsql fará o balanceamento entre as duas portas automaticamente.
+// 3. Registro do DbContext de LEITURA (Rï¿½plicas - Portas 5433 e 5434)
+// O Npgsql farï¿½ o balanceamento entre as duas portas automaticamente.
 builder.Services.AddDbContext<ReadOnlyDbContext>(options => options.UseNpgsql(replicaCs));
 
 
@@ -28,12 +28,23 @@ builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 
+// Add Swagger UI services
+builder.Services.AddSwaggerGen();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    
+    // Add Swagger UI middleware
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "ScalingReads API v1");
+        c.RoutePrefix = "swagger"; // Makes Swagger UI available at /swagger
+    });
 }
 
 app.UseHttpsRedirection();

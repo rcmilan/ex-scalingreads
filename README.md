@@ -1,170 +1,270 @@
-# ScalingReads - PostgreSQL Master-Replica Read Scaling Project
+# Database Read Scaling Tutorial: PostgreSQL Master-Replica with Redis Caching
 
-A comprehensive .NET 10.0 Web API demonstrating database read scaling using PostgreSQL master-replica setup with Redis caching and Entity Framework Core.
+This tutorial will guide you through building and understanding a database read scaling system using PostgreSQL master-replica architecture, automatic load balancing, and Redis caching. By the end, you'll understand how to distribute read operations across multiple database instances while maintaining data consistency and improving performance.
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [Architecture Overview](#architecture-overview)
-- [Database Setup](#database-setup)
-- [Entity Framework Context Strategy](#entity-framework-context-strategy)
+- [What is Database Read Scaling?](#what-is-database-read-scaling)
+- [Core Concepts](#core-concepts)
+- [System Architecture](#system-architecture)
 - [Prerequisites](#prerequisites)
-- [Setup and Installation](#setup-and-installation)
-- [Database Operations](#database-operations)
-- [Development Workflow](#development-workflow)
-- [Testing the Setup](#testing-the-setup)
+- [Step-by-Step Setup](#step-by-step-setup)
+- [Understanding the Code](#understanding-the-code)
+- [Practical Examples](#practical-examples)
 - [Troubleshooting](#troubleshooting)
-- [Project Structure](#project-structure)
+- [Advanced Topics](#advanced-topics)
 
-## 🏗️ Architecture Overview
+## What is Database Read Scaling?
 
-### Read Scaling Strategy
+Database read scaling is a technique to handle high-volume read operations by distributing them across multiple database instances. Instead of all queries hitting a single database, read operations are load-balanced across replica databases while write operations remain centralized on a master database.
 
-This project implements a sophisticated read scaling architecture that distributes database load across multiple PostgreSQL instances:
+### Why Read Scaling Matters
+
+- **Performance**: Multiple replicas can handle more concurrent read requests
+- **Availability**: System continues working even if one replica fails
+- **Cost Efficiency**: Replicas can use less powerful hardware than the master
+- **User Experience**: Faster response times for read-heavy applications
+
+### Real-World Applications
+
+Read scaling is essential for:
+- Social media platforms (timeline reads)
+- E-commerce sites (product catalog browsing)
+- Analytics dashboards (report generation)
+- Content management systems (article viewing)
+
+## Core Concepts
+
+### Master-Replica Architecture
+
+**Master Database**: The single source of truth that handles all write operations (INSERT, UPDATE, DELETE). It maintains the authoritative copy of all data.
+
+**Replica Databases**: Read-only copies of the master that receive data changes through streaming replication. They handle SELECT queries and are automatically kept in sync.
+
+### Load Balancing
+
+Load balancing distributes read requests across multiple replica databases to prevent any single instance from becoming a bottleneck. Our implementation uses Npgsql's built-in load balancing, which automatically routes queries to available replicas.
+
+### Caching Layer
+
+Redis caching stores frequently accessed data in memory for ultra-fast retrieval. This reduces database load and improves response times for popular content.
+
+## System Architecture
 
 ```
-Write Ops → Master DB (5432)
-Read Ops → Replica 1 (5433) / Replica 2 (5434) [Load Balanced]
-Cache → Redis (6379)
+Application → Load Balancer → Replicas (5433, 5434) + Redis Cache
+                      ↓
+               Master Database (5432)
 ```
 
-### Key Components
+### Data Flow
 
-1. **Master Database (PostgreSQL - Port 5432)**
-   - Handles all write operations (INSERT, UPDATE, DELETE)
-   - Source of truth for all data
-   - Applies database migrations
-   - Replicates data to replica databases
+1. **Write Operations**: Application → Master Database
+2. **Read Operations**: Application → Load Balancer → Replica 1/2 (with Redis cache)
+3. **Replication**: Master → Replicas (automatic streaming)
 
-2. **Replica Databases (PostgreSQL - Ports 5433, 5434)**
-   - Handle all read operations (SELECT)
-   - Receive data from master via streaming replication
-   - Load-balanced automatically by Npgsql
-   - Configured as hot standbys (read-only)
+## Prerequisites
 
-3. **Redis Cache**
-   - Provides high-performance caching layer
-   - Reduces database load for frequently accessed data
-   - Improves response times for read operations
+Before starting, ensure you have:
 
-4. **Application Layer**
-   - `AppDbContext`: Used for write operations
-   - `ReadOnlyDbContext`: Used for read operations (prevents writes)
-   - Automatic load balancing between replicas via Npgsql connection string
+1. **.NET 10.0 SDK**
+   ```bash
+   # Download from https://dotnet.microsoft.com/download/dotnet/10.0
+   dotnet --version  # Should show 10.0.x
+   ```
 
-### How It Works
+2. **Docker Desktop**
+   ```bash
+   # Download from https://www.docker.com/products/docker-desktop
+   docker --version  # Should show version info
+   ```
 
-- **Write Operations**: Always routed to the master database (port 5432)
-- **Read Operations**: Load-balanced across replica databases (ports 5433, 5434)
-- **Data Consistency**: PostgreSQL streaming replication ensures replicas stay synchronized
-- **Caching Strategy**: Redis cache reduces database queries for frequently accessed data
+3. **Git** (for cloning the repository)
+   ```bash
+   git --version
+   ```
 
-## 🗄️ Database Setup
+## Step-by-Step Setup
 
-### Docker Compose Configuration
+### Step 1: Get the Project
 
-The project uses Docker Compose to orchestrate a PostgreSQL master-replica setup:
+```bash
+# Clone the repository
+git clone <repository-url>
+cd ex-scalingreads
 
-```yaml
-services:
-  redis:
-    image: redis:alpine
-    container_name: redis-cache
-    ports:
-      - "6379:6379"
-
-  pg-master:
-    image: postgres:18-alpine
-    container_name: pg-master
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin_password
-      POSTGRES_DB: appdb
-    ports:
-      - "5432:5432"
-
-  pg-replica-1:
-    image: postgres:18-alpine
-    container_name: pg-replica-1
-    environment:
-      POSTGRES_PASSWORD: admin_password
-    depends_on:
-      - pg-master
-    ports:
-      - "5433:5432"
-
-  pg-replica-2:
-    image: postgres:18-alpine
-    container_name: pg-replica-2
-    environment:
-      POSTGRES_PASSWORD: admin_password
-    depends_on:
-      - pg-master
-    ports:
-      - "5434:5432"
+# Or if you already have it, navigate to the directory
+cd /path/to/ex-scalingreads
 ```
 
-### Database Configuration
+### Step 2: Start the Database Infrastructure
 
-**Master Database (Port 5432)**
-- **Host**: localhost
-- **Port**: 5432
-- **Database**: appdb
-- **Username**: admin
-- **Password**: admin_password
-- **Purpose**: Write operations, migrations, data source of truth
+Our system uses Docker Compose to run PostgreSQL master-replica setup and Redis cache.
 
-**Replica Databases (Ports 5433, 5434)**
-- **Host**: localhost
-- **Port**: 5433 (replica 1), 5434 (replica 2)
-- **Database**: appdb
-- **Username**: postgres
-- **Password**: admin_password
-- **Purpose**: Read operations only
+```bash
+# Start all services
+docker-compose up -d
 
-**Redis Cache**
-- **Host**: localhost
-- **Port**: 6379
-- **Purpose**: High-performance caching
-
-### Replication Setup
-
-1. **Master Configuration** (`master/init-master.sh`):
-   - Creates replication user (`replicator`)
-   - Configures pg_hba.conf for replication access
-   - Enables replication logging
-
-2. **Replica Configuration** (`replica/init-replica.sh`):
-   - Waits for master to be ready
-   - Performs initial data sync using `pg_basebackup`
-   - Configures as hot standby for read operations
-   - Enables streaming replication
-
-### Connection Strings
-
-```json
-{
-  "ConnectionStrings": {
-    "MasterConnection": "Host=localhost;Port=5432;Database=appdb;Username=admin;Password=admin_password",
-    "ReplicaConnection": "Host=localhost,localhost;Port=5433,5434;Database=appdb;Username=postgres;Password=admin_password;Load Balance Hosts=true",
-    "RedisConnection": "localhost:6379"
-  }
-}
+# Check that all services are running
+docker-compose ps
 ```
 
-**Key Points**:
-- `Load Balance Hosts=true` enables automatic load balancing between replicas
-- Multiple hosts are specified as comma-separated values
-- Npgsql automatically distributes read queries across available replicas
+You should see output like:
+```
+      Name                    Command               State           Ports
+-------------------------------------------------------------------------------------
+pg-master        docker-entrypoint.sh postgres    Up      0.0.0.0:5432->5432/tcp
+pg-replica-1     docker-entrypoint.sh postgres    Up      0.0.0.0:5433->5432/tcp
+pg-replica-2     docker-entrypoint.sh postgres    Up      0.0.0.0:5434->5432/tcp
+redis-cache      docker-entrypoint.sh redis ...   Up      0.0.0.0:6379->6379/tcp
+```
 
-## 🔧 Entity Framework Context Strategy
+### Step 3: Verify Database Replication
 
-### AppDbContext - Write Operations
+Let's check that our databases are properly set up and replicating.
 
+```bash
+# Check master is ready
+docker exec -it pg-master pg_isready -U admin -d appdb
+
+# Check replication status (should show 2 replicas)
+docker exec -it pg-master psql -U admin -d appdb -c "SELECT * FROM pg_stat_replication;"
+```
+
+The replication query should show 2 connected replicas.
+
+### Step 4: Set Up the Database Schema
+
+```bash
+# Navigate to the application directory
+cd ScalingReads.Core
+
+# Create and apply database migrations
+dotnet ef database update -c AppDbContext
+
+# Verify tables were created
+docker exec -it pg-master psql -U admin -d appdb -c "\dt"
+```
+
+You should see tables like "Albums" and "Songs" created.
+
+### Step 5: Start the Application
+
+```bash
+# Run the .NET application
+dotnet run
+
+# Or for HTTPS development
+dotnet run --launch-profile https
+```
+
+The application will start on:
+- HTTP: http://localhost:5291
+- HTTPS: https://localhost:7062
+- API Documentation: http://localhost:5291/swagger
+
+## PostgreSQL Master-Replica Configuration Deep Dive
+
+This section provides an in-depth explanation of the PostgreSQL streaming replication setup used in this tutorial, covering every configuration aspect from parameters to security.
+
+### 1. PostgreSQL Configuration Parameters
+
+The master database is configured with specific parameters in `docker-compose.yaml` to enable streaming replication:
+
+- **`wal_level=replica`**: Sets the Write-Ahead Logging level to 'replica', which includes all information needed for archiving and replication. This parameter is essential for streaming replication as it ensures WAL contains sufficient data for replicas to reconstruct the master's state.
+
+- **`max_wal_senders=10`**: Specifies the maximum number of concurrent connections from standby servers or streaming base backup clients. Set to 10 to allow multiple replicas and backup operations, providing headroom for scaling.
+
+- **`max_replication_slots=10`**: Defines the maximum number of replication slots that the server can support. Replication slots ensure that the master retains WAL segments until all replicas have received them, preventing premature cleanup that could break replication.
+
+### 2. Replication User Setup
+
+The `init/01-replication.sql` script creates a dedicated replication user:
+
+```sql
+CREATE ROLE replicator
+  WITH REPLICATION
+  LOGIN
+  PASSWORD 'repl_password';
+```
+
+This user is specifically created for replication purposes and has the `REPLICATION` privilege, which allows it to connect for replication operations. Using a separate user follows security best practices by limiting permissions to only what's necessary for replication, reducing the attack surface compared to using administrative accounts.
+
+### 3. Authentication Configuration
+
+The `init/02-pg-hba.sh` script configures client authentication by appending entries to `pg_hba.conf`:
+
+```bash
+echo "host replication replicator 0.0.0.0/0 scram-sha-256" >> "$PGDATA/pg_hba.conf"
+echo "host all all 0.0.0.0/0 scram-sha-256" >> "$PGDATA/pg_hba.conf"
+```
+
+- The first line allows the `replicator` user to connect for replication from any IP address within the Docker network (0.0.0.0/0) using SCRAM-SHA-256 authentication.
+- The second line allows all users to connect to any database using SCRAM-SHA-256 authentication.
+- SCRAM-SHA-256 (Salted Challenge Response Authentication Mechanism) is a modern, secure password-based authentication method that provides better security than older methods like MD5 by using salted hashing and preventing replay attacks.
+
+### 4. Replica Initialization Process
+
+The `replica.sh` script orchestrates the complete replica initialization and startup process:
+
+1. **Directory Preparation**: Creates and sets proper permissions on the PostgreSQL data directory, ensuring the postgres user has ownership and secure access (700 permissions).
+
+2. **Master Readiness Verification**: Uses a loop with `pg_isready` to wait for the master database to become available, preventing startup failures.
+
+3. **Base Backup Execution**: When the data directory is empty, performs an initial base backup from the master using `pg_basebackup`:
+   - `-h pg-master`: Specifies the master host
+   - `-U replicator`: Authenticates using the replication user
+   - `-D $DATA_DIR`: Sets the destination data directory
+   - `-Fp`: Uses plain format for easier inspection
+   - `-Xs`: Includes required WAL segments in the backup for consistency
+   - `-P`: Displays progress information
+   - `-R`: Automatically creates `standby.signal` and configures recovery settings
+
+4. **PostgreSQL Startup**: Launches PostgreSQL in hot standby mode with `hot_standby=on`, enabling read-only queries while maintaining replication capability.
+
+### 5. Health Checks and Startup Order
+
+Docker Compose manages service dependencies and health verification:
+
+- **`depends_on` with `condition: service_healthy`**: Replicas explicitly wait for the master to pass its health check before starting, ensuring proper initialization order.
+- **Master Health Check**: Uses `pg_isready` to verify the master database is accepting connections, with 5-second intervals, 5-second timeouts, and 10 retries for robust startup.
+- **Sequential Startup**: This dependency chain ensures the master is fully operational before replicas attempt to connect, preventing replication setup failures.
+
+### 6. Streaming Replication Mechanics
+
+Data flows from master to replicas through PostgreSQL's streaming replication:
+
+1. **WAL Generation**: The master generates Write-Ahead Log (WAL) records for every database change, providing a sequential record of all modifications.
+
+2. **Real-time Streaming**: WAL records are transmitted to replicas via dedicated TCP connections established by the replication user, ensuring minimal latency.
+
+3. **Continuous Replay**: Replicas receive WAL records and replay them in order, applying changes to maintain an exact copy of the master's data.
+
+4. **Hot Standby Operation**: While receiving updates, replicas can simultaneously serve read-only queries, enabling load distribution without interrupting replication.
+
+### 7. Security Considerations
+
+The configuration implements multiple security layers:
+
+- **Strong Authentication**: SCRAM-SHA-256 provides modern cryptographic protection for passwords.
+- **Network Segmentation**: Docker's internal networking limits database access to containerized services only.
+- **Principle of Least Privilege**: The replication user has only the minimum permissions required for its function.
+- **Access Control**: `pg_hba.conf` entries restrict connection types and authentication methods appropriately.
+- **Encrypted Communication**: All replication traffic occurs over authenticated, encrypted connections within the Docker network.
+
+## Understanding the Code
+
+### Database Contexts: Separating Reads and Writes
+
+Our application uses two Entity Framework contexts to enforce separation of concerns:
+
+**AppDbContext** (for writes):
 ```csharp
 public class AppDbContext : DbContext
 {
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
+
     }
 
     public DbSet<Album> Albums => Set<Album>();
@@ -185,269 +285,184 @@ public class AppDbContext : DbContext
 }
 ```
 
-**Purpose**: 
-- Handle all write operations (INSERT, UPDATE, DELETE)
-- Manage database migrations
-- Ensure data consistency
-- Connected to master database
-
-### ReadOnlyDbContext - Read Operations
-
+**ReadOnlyDbContext** (for reads):
 ```csharp
 public class ReadOnlyDbContext : AppDbContext
 {
     public ReadOnlyDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
-        // Optimization: Disable change tracking by default
-        // since this context should never perform writes
         ChangeTracker.QueryTrackingBehavior = QueryTrackingBehavior.NoTracking;
     }
 
-    // Override all SaveChanges methods to prevent writes
     public override int SaveChanges() => ThrowReadOnlyException();
     public override int SaveChanges(bool acceptAllChangesOnSuccess) => ThrowReadOnlyException();
     public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) => ThrowReadOnlyException();
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default) => ThrowReadOnlyException();
 
     private static int ThrowReadOnlyException()
-        => throw new InvalidOperationException("This context is read-only and does not allow data persistence.");
+        => throw new InvalidOperationException();
 }
 ```
 
-**Purpose**:
-- Handle all read operations (SELECT)
-- Prevent accidental writes by overriding SaveChanges methods
-- Connected to replica databases with load balancing
-- Optimized with no tracking for better performance
+### Connection Configuration
 
-### Dependency Injection Configuration
+In `appsettings.json`:
+```json
+{
+  "ConnectionStrings": {
+    "MasterConnection": "Host=localhost;Port=5432;Database=appdb;Username=admin;Password=admin_password",
+    "ReplicaConnection": "Host=localhost,localhost;Port=5433,5434;Database=appdb;Username=postgres;Password=admin_password;Load Balance Hosts=true",
+    "RedisConnection": "localhost:6379"
+  }
+}
+```
 
+The `Load Balance Hosts=true` setting tells Npgsql to automatically distribute read queries across the replica databases.
+
+### Dependency Injection Setup
+
+In `Program.cs`:
 ```csharp
-var builder = WebApplication.CreateBuilder(args);
-
-// 1. Connection Strings
 var masterCs = builder.Configuration.GetConnectionString("MasterConnection");
 var replicaCs = builder.Configuration.GetConnectionString("ReplicaConnection");
 
-// 2. Register WRITE DbContext (Master - Port 5432)
-// Used for: Migrations, Inserts, Updates, Deletes
 builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(masterCs));
 
-// 3. Register READ DbContext (Replicas - Ports 5433 and 5434)
-// Npgsql will automatically balance between the two ports
 builder.Services.AddDbContext<ReadOnlyDbContext>(options => options.UseNpgsql(replicaCs));
 
-// 4. Redis Cache
 builder.Services.AddStackExchangeRedisCache(options =>
 {
-    options.Configuration = builder.Configuration.GetConnectionString("RedisConnection");
-    options.InstanceName = "ScalingReads_";
+    options.Configuration = "localhost:6379";
+    options.InstanceName = "app-cache:";
 });
 ```
 
-## 📋 Prerequisites
+### API Controller with Caching
 
-Before setting up the project, ensure you have the following installed:
+The `AlbumController` demonstrates both write and read patterns:
 
-1. **.NET 10.0 SDK**
-   - Download from: https://dotnet.microsoft.com/download/dotnet/10.0
-   - Verify installation: `dotnet --version`
+```csharp
+[Route("api/[controller]")]
+[ApiController]
+public class AlbumController : ControllerBase
+{
+    [HttpPost]
+    public async Task<ActionResult<PostAlbumOutput>> Post([FromServices] AppDbContext dbContext, [FromBody] PostAlbumInput input)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
 
-2. **Docker Desktop**
-   - Download from: https://www.docker.com/products/docker-desktop
-   - Ensure Docker daemon is running
+        using var transaction = await dbContext.Database.BeginTransactionAsync();
 
-3. **Git** (optional, for version control)
-   - Download from: https://git-scm.com/downloads
+        var newAlbum = new Album()
+        {
+            Title = input.Title,
+            Songs = [.. input.Songs.Select(s => new Song(s.Title))]
+        };
 
-## 🚀 Setup and Installation
+        await dbContext.Albums.AddAsync(newAlbum);
 
-### Step 1: Clone or Navigate to Project
+        await dbContext.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        var result = new PostAlbumOutput(newAlbum.Id);
+
+        return Ok(result);
+    }
+
+    [HttpGet("{id}")]
+    [Cache(ttlSeconds: 120)]
+    public async Task<ActionResult<GetAlbumOutput>> Get([FromServices] ReadOnlyDbContext dbContext, [FromRoute] int id)
+    {
+        var album = await dbContext.Albums
+            .Where(a => a.Id == id)
+            .Select(a => new GetAlbumOutput(
+                a.Id,
+                a.Title,
+                a.Songs.Select(s => new GetAlbumSongOutput(s.Title)).ToList()
+            )).FirstOrDefaultAsync();
+
+        return Ok(album);
+    }
+}
+```
+
+### Custom Caching Attribute
+
+The `CacheAttribute` provides automatic Redis caching:
+
+```csharp
+[AttributeUsage(AttributeTargets.Method)]
+public class CacheAttribute(int ttlSeconds = 60) : Attribute, IAsyncActionFilter
+{
+    public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
+    {
+        var cache = context.HttpContext.RequestServices.GetRequiredService<IDistributedCache>();
+
+        var cacheKey = BuildCacheKey(context);
+
+        var cached = await cache.GetStringAsync(cacheKey);
+
+        if (cached is not null)
+        {
+            var result = JsonSerializer.Deserialize<object>(cached);
+            context.Result = new OkObjectResult(result);
+            return;
+        }
+
+        var executed = await next();
+
+        if (executed.Result is ObjectResult objectResult && objectResult.Value is not null)
+        {
+            var data = JsonSerializer.Serialize(objectResult.Value);
+
+            await cache.SetStringAsync(
+                cacheKey,
+                data,
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow =
+                        TimeSpan.FromSeconds(ttlSeconds)
+                });
+        }
+    }
+
+    private static string BuildCacheKey(ActionExecutingContext context)
+    {
+        var route = context.HttpContext.Request.Path.Value ?? "";
+
+        if (context.ActionDescriptor is not ControllerActionDescriptor controllerAction)
+            return $"endpoint:{route}";
+
+        var relevantArgs = new Dictionary<string, object?>();
+
+        foreach (var param in controllerAction.MethodInfo.GetParameters())
+        {
+            if (param.GetCustomAttributes(typeof(FromServicesAttribute), false).Length != 0)
+                continue;
+
+            if (context.ActionArguments.TryGetValue(param.Name!, out var value))
+            {
+                relevantArgs[param.Name!] = value;
+            }
+        }
+
+        var argsJson = JsonSerializer.Serialize(relevantArgs);
+
+        var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(argsJson));
+        var hash = Convert.ToHexString(hashBytes);
+
+        return $"endpoint:{route}:{hash}";
+    }
+}
+```
+
+## Practical Examples
+
+### Creating Data
 
 ```bash
-# If cloning from repository
-git clone <repository-url>
-cd ex-scalingreads
-
-# Or navigate to the project directory
-cd /path/to/ex-scalingreads
-```
-
-### Step 2: Start Database Infrastructure
-
-```bash
-# Start all services (master, replicas, Redis)
-docker-compose up -d
-
-# Check service status
-docker-compose ps
-```
-
-**Expected Output:**
-```
-     Name                    Command               State           Ports         
--------------------------------------------------------------------------------------
-pg-master        docker-entrypoint.sh postgres    Up      0.0.0.0:5432->5432/tcp
-pg-replica-1     docker-entrypoint.sh postgres    Up      0.0.0.0:5433->5432/tcp
-pg-replica-2     docker-entrypoint.sh postgres    Up      0.0.0.0:5434->5432/tcp
-redis-cache      docker-entrypoint.sh redis ...   Up      0.0.0.0:6379->6379/tcp
-```
-
-### Step 3: Verify Database Setup
-
-```bash
-# Check master database
-docker exec -it pg-master psql -U admin -d appdb -c "SELECT version();"
-
-# Check replication status (should show replica processes)
-docker exec -it pg-master psql -U admin -d appdb -c "SELECT * FROM pg_stat_replication;"
-```
-
-### Step 4: Run Database Migrations
-
-```bash
-# Navigate to the project directory
-cd ScalingReads.Core
-
-# Add initial migration
-dotnet ef migrations add initial -c AppDbContext
-
-# Apply migrations to master database
-dotnet ef database update -c AppDbContext
-
-# Verify tables created
-docker exec -it pg-master psql -U admin -d appdb -c "\dt"
-```
-
-### Step 5: Start the Application
-
-```bash
-# From ScalingReads.Core directory
-dotnet run
-
-# Or for HTTPS
-dotnet run --launch-profile https
-
-# Application will start on:
-# HTTP: http://localhost:5291
-# HTTPS: https://localhost:7062
-```
-
-## 🗄️ Database Operations
-
-### Migration Commands
-
-```bash
-# Add a new migration
-dotnet ef migrations add MigrationName -c AppDbContext
-
-# Apply pending migrations
-dotnet ef database update -c AppDbContext
-
-# Remove last migration (if not applied)
-dotnet ef migrations remove -c AppDbContext
-
-# Reset database (⚠️ Destroys all data)
-dotnet ef database drop -c AppDbContext
-dotnet ef database update -c AppDbContext
-```
-
-### Entity Framework CLI Tools
-
-If you encounter issues with `dotnet ef` commands, install the tools globally:
-
-```bash
-dotnet tool install --global dotnet-ef
-```
-
-### Understanding Migrations
-
-Migrations are applied **only to the master database**. The replicas automatically receive changes through PostgreSQL streaming replication. This ensures:
-
-1. **Data Consistency**: All databases have identical schemas
-2. **Automatic Sync**: Replicas stay synchronized without manual intervention
-3. **Single Source of Truth**: Master database is the only source for schema changes
-
-## 🔄 Development Workflow
-
-### For New Developers
-
-1. **Initial Setup**:
-   ```bash
-   # Start infrastructure
-   docker-compose up -d
-   
-   # Wait for databases to be ready (30 seconds)
-   sleep 30
-   
-   # Run migrations
-   cd ScalingReads.Core
-   dotnet ef database update -c AppDbContext
-   
-   # Start application
-   dotnet run
-   ```
-
-2. **Making Changes**:
-   ```bash
-   # Create new migration for schema changes
-   dotnet ef migrations add YourMigrationName -c AppDbContext
-   
-   # Apply to master database
-   dotnet ef database update -c AppDbContext
-   
-   # Test your changes
-   dotnet run
-   ```
-
-3. **Common Development Tasks**:
-   ```bash
-   # View current migration status
-   dotnet ef migrations list -c AppDbContext
-   
-   # Generate SQL script (for review)
-   dotnet ef migrations script -c AppDbContext
-   
-   # Check database schema
-   docker exec -it pg-master psql -U admin -d appdb -c "\dt"
-   ```
-
-### Adding New Features
-
-1. **Create Models**:
-   ```csharp
-   public class YourEntity
-   {
-       public int Id { get; set; }
-       public required string Name { get; set; }
-   }
-   ```
-
-2. **Update DbContext**:
-   ```csharp
-   public DbSet<YourEntity> YourEntities => Set<YourEntity>();
-   ```
-
-3. **Create Migration**:
-   ```bash
-   dotnet ef migrations add AddYourEntity -c AppDbContext
-   dotnet ef database update -c AppDbContext
-   ```
-
-### Code Organization
-
-- **Models**: `ScalingReads.Core/Models/`
-- **Data Contexts**: `ScalingReads.Core/Data/`
-- **Controllers**: `ScalingReads.Core/Controllers/`
-- **IO DTOs**: `ScalingReads.Core/IO/`
-- **Migrations**: `ScalingReads.Core/Migrations/`
-
-## 🧪 Testing the Setup
-
-### Test Write Operations
-
-```bash
-# Test creating an album (writes to master)
+# Create a new album (writes to master)
 curl -X POST http://localhost:5291/api/album \
   -H "Content-Type: application/json" \
   -d '{
@@ -459,280 +474,198 @@ curl -X POST http://localhost:5291/api/album \
   }'
 ```
 
-**Expected Response:**
+Response:
 ```json
 {
   "id": 1
 }
 ```
 
-### Test Read Operations
+### Reading Data with Caching
 
 ```bash
-# Check if data is replicated to replicas
-docker exec -it pg-replica-1 psql -U postgres -d appdb -c "SELECT * FROM \"Albums\";"
-docker exec -it pg-replica-2 psql -U postgres -d appdb -c "SELECT * FROM \"Albums\";"
+# First read (goes to database, then cached)
+curl http://localhost:5291/api/album/1
+
+# Second read (served from Redis cache)
+curl http://localhost:5291/api/album/1
 ```
 
-### Test Load Balancing
+Both requests return:
+```json
+{
+  "id": 1,
+  "title": "Test Album",
+  "songs": [
+    {"title": "Song 1"},
+    {"title": "Song 2"}
+  ]
+}
+```
+
+### Verifying Load Balancing
 
 ```bash
-# Multiple read requests (should be distributed across replicas)
+# Make multiple read requests
 for i in {1..10}; do
-  curl http://localhost:5291/api/album/1
+  curl -s http://localhost:5291/api/album/1 > /dev/null
   echo "Request $i completed"
-  sleep 1
+  sleep 0.5
 done
 ```
 
-### Verify Replication Status
-
+Check which replica handled the requests:
 ```bash
-# Check replication lag
-docker exec -it pg-master psql -U admin -d appdb -c "
-SELECT 
-  application_name,
-  client_addr,
-  state,
-  replay_lag,
-  write_lag,
-  flush_lag
-FROM pg_stat_replication;
-"
+# Check replica 1 connections
+docker exec -it pg-replica-1 psql -U postgres -d appdb -c "SELECT count(*) FROM pg_stat_activity WHERE datname='appdb';"
 
-# Check database connections
-docker exec -it pg-master psql -U admin -d appdb -c "
-SELECT 
-  datname,
-  usename,
-  client_addr,
-  state
-FROM pg_stat_activity 
-WHERE datname = 'appdb';
-"
+# Check replica 2 connections
+docker exec -it pg-replica-2 psql -U postgres -d appdb -c "SELECT count(*) FROM pg_stat_activity WHERE datname='appdb';"
 ```
 
-## 🔧 Troubleshooting
+### Checking Cache Contents
 
-### Common Issues and Solutions
-
-#### 1. Database Connection Issues
-
-**Problem**: Cannot connect to databases
 ```bash
-# Check if containers are running
+# View all cache keys
+docker exec -it redis-cache redis-cli keys "*"
+
+# Get cached album data
+docker exec -it redis-cache redis-cli get "app-cache:album-1"
+```
+
+## Troubleshooting
+
+### Database Connection Issues
+
+**Problem**: Can't connect to databases
+```bash
+# Check container status
 docker-compose ps
 
-# Check logs
+# View logs
 docker-compose logs pg-master
 docker-compose logs pg-replica-1
-docker-compose logs pg-replica-2
 ```
 
-**Solutions**:
+**Solution**:
 ```bash
 # Restart services
 docker-compose down
 docker-compose up -d
 
-# Check port conflicts
-netstat -an | grep 543
+# Wait for health checks
+sleep 30
 ```
 
-#### 2. Migration Issues
+### Replication Not Working
 
-**Problem**: Migration fails or database not found
-
-**Solutions**:
+**Problem**: Replicas not receiving data
 ```bash
-# Ensure master database is ready
-docker exec -it pg-master pg_isready -U admin -d appdb
-
-# Check connection string
-# Verify appsettings.json has correct values
-
-# Reset migrations (⚠️ Deletes data)
-dotnet ef database drop -c AppDbContext
-dotnet ef database update -c AppDbContext
+# Check replication status
+docker exec -it pg-master psql -U admin -d appdb -c "SELECT * FROM pg_stat_replication;"
 ```
 
-#### 3. Replication Issues
-
-**Problem**: Replicas not receiving data from master
-
-**Check replication status**:
-```bash
-# On master
-docker exec -it pg-master psql -U admin -d appdb -c "
-SELECT * FROM pg_stat_replication;
-"
-
-# Expected: Should show 2 replica connections
-```
-
-**Solutions**:
+**Solution**:
 ```bash
 # Restart replicas
 docker-compose restart pg-replica-1 pg-replica-2
 
 # Check replica logs
 docker-compose logs pg-replica-1
-docker-compose logs pg-replica-2
-
-# Manual replica sync (⚠️ Advanced)
-docker exec -it pg-replica-1 psql -U postgres -c "SELECT pg_drop_replication_slot('default');"
-docker-compose restart pg-replica-1
 ```
 
-#### 4. Redis Connection Issues
+### Migration Failures
 
-**Problem**: Redis cache not working
+**Problem**: Database migrations fail
+```bash
+# Ensure master is ready
+docker exec -it pg-master pg_isready -U admin -d appdb
 
-**Check Redis status**:
+# Reset if needed (WARNING: destroys data)
+dotnet ef database drop -c AppDbContext
+dotnet ef database update -c AppDbContext
+```
+
+### Cache Not Working
+
+**Problem**: Redis caching not functioning
 ```bash
 # Test Redis connection
-docker exec -it redis-cache redis-cli ping
-# Expected: PONG
-```
+docker exec -it redis-cache redis-cli ping  # Should return PONG
 
-**Solutions**:
-```bash
-# Restart Redis
-docker-compose restart redis-cache
-
-# Clear Redis cache
+# Clear cache if needed
 docker exec -it redis-cache redis-cli FLUSHALL
 ```
 
-#### 5. Port Conflicts
+### Port Conflicts
 
 **Problem**: Ports already in use
-
-**Solutions**:
 ```bash
-# Find process using port
+# Find conflicting processes
 netstat -ano | findstr :5432
 netstat -ano | findstr :5433
 netstat -ano | findstr :5434
 netstat -ano | findstr :6379
 
-# Kill process (replace PID with actual process ID)
+# Kill process (replace PID)
 taskkill /PID <PID> /F
 ```
 
-### Performance Troubleshooting
+## Advanced Topics
 
-#### Check Database Performance
+### Monitoring Replication Lag
 
 ```bash
-# Check slow queries
+# Check replication lag
 docker exec -it pg-master psql -U admin -d appdb -c "
-SELECT query, mean_time, calls 
-FROM pg_stat_statements 
-ORDER BY mean_time DESC 
-LIMIT 10;
-"
-
-# Check connection counts
-docker exec -it pg-master psql -U admin -d appdb -c "
-SELECT state, count(*) 
-FROM pg_stat_activity 
-GROUP BY state;
+SELECT
+  application_name,
+  replay_lag,
+  write_lag,
+  flush_lag
+FROM pg_stat_replication;
 "
 ```
 
-#### Monitor Application Logs
+### Performance Optimization
 
-```bash
-# Enable detailed EF Core logging
-# In appsettings.Development.json:
-{
-  "Logging": {
-    "LogLevel": {
-      "Microsoft.EntityFrameworkCore.Database.Command": "Information"
-    }
-  }
-}
-```
+- **Connection Pooling**: Npgsql automatically pools connections
+- **No-Tracking Queries**: ReadOnlyDbContext disables change tracking
+- **Strategic Caching**: Cache frequently accessed data with appropriate TTL
+- **Index Optimization**: Ensure proper indexes on frequently queried columns
 
-### Health Checks
+### Scaling Further
 
-#### Database Health
+- **Add More Replicas**: Scale horizontally by adding more replica containers
+- **Read/Write Split**: Extend to route different query types appropriately
+- **Multi-Region**: Deploy replicas across geographic regions
+- **Cache Warming**: Pre-populate cache with popular data
 
-```bash
-# Master database
-docker exec -it pg-master pg_isready -U admin -d appdb
+### Production Considerations
 
-# Replica databases
-docker exec -it pg-replica-1 pg_isready -U postgres -d appdb
-docker exec -it pg-replica-2 pg_isready -U postgres -d appdb
+- **Backup Strategy**: Regular backups of master database
+- **Failover**: Automatic promotion of replica to master if needed
+- **Security**: Use proper authentication and network isolation
+- **Monitoring**: Implement comprehensive monitoring and alerting
 
-# Redis
-docker exec -it redis-cache redis-cli ping
-```
+## Conclusion
 
-#### Application Health
+You've now built and understood a complete database read scaling system. The architecture demonstrates:
 
-```bash
-# Check application is responding
-curl http://localhost:5291/api/album/1
+- **Separation of concerns** between read and write operations
+- **Automatic load balancing** across replica databases
+- **High-performance caching** with Redis
+- **Data consistency** through streaming replication
+- **Production-ready patterns** for scalable applications
 
-# Check OpenAPI documentation
-open http://localhost:5291/swagger
-```
+This foundation can be extended for more complex scenarios and serves as a solid starting point for understanding enterprise-grade database scaling patterns.
 
-## 📁 Project Structure
+## Next Steps
 
-```
-ex-scalingreads/
-├── README.md                           # This file
-├── docker-compose.yaml                 # Database infrastructure
-├── .gitignore                          # Git ignore rules
-├── ex-scalingreads.slnx                # Solution file
-├── master/                             # Master database configuration
-│   ├── init-master.sh                  # Master initialization script
-│   └── pg_hba.conf                     # PostgreSQL authentication config
-├── replica/                            # Replica database configuration
-│   └── init-replica.sh                 # Replica initialization script
-└── ScalingReads.Core/                  # Main application project
-    ├── Controllers/                    # API Controllers
-    │   └── AlbumController.cs          # Album CRUD operations
-    ├── Data/                           # Entity Framework contexts
-    │   ├── AppDbContext.cs             # Write operations context
-    │   └── ReadOnlyDbContext.cs        # Read-only context
-    ├── IO/                             # Input/Output DTOs
-    │   ├── PostAlbumInput.cs           # Album creation input
-    │   └── PostAlbumOutput.cs          # Album creation output
-    ├── Models/                         # Entity models
-    │   ├── Album.cs                    # Album entity
-    │   └── Song.cs                     # Song entity (owned by Album)
-    ├── Migrations/                     # Entity Framework migrations
-    │   ├── 20251227154713_initial.cs   # Initial migration
-    │   ├── 20251227154713_initial.Designer.cs
-    │   └── AppDbContextModelSnapshot.cs
-    ├── Properties/                     # Application properties
-    │   └── launchSettings.json         # Launch configuration
-    ├── Program.cs                      # Application entry point
-    ├── appsettings.json                # Application configuration
-    └── ScalingReads.Core.csproj        # Project file
-```
+- Experiment with adding more replicas
+- Implement cache invalidation strategies
+- Add monitoring and metrics
+- Explore advanced PostgreSQL features like logical replication
+- Consider implementing write-through caching
 
-### Key Files Explained
-
-- **docker-compose.yaml**: Defines the PostgreSQL master-replica infrastructure
-- **Program.cs**: Configures dependency injection and database contexts
-- **AppDbContext.cs**: Handles write operations and migrations
-- **ReadOnlyDbContext.cs**: Handles read operations with write protection
-- **AlbumController.cs**: Demonstrates write operations using AppDbContext
-- **init-master.sh**: Sets up replication on the master database
-- **init-replica.sh**: Configures replicas to sync from master
-
-## 🎯 Key Takeaways
-
-1. **Separation of Concerns**: Write operations use AppDbContext, read operations use ReadOnlyDbContext
-2. **Automatic Load Balancing**: Npgsql distributes read queries across replicas
-3. **Data Consistency**: PostgreSQL streaming replication keeps replicas synchronized
-4. **Performance Optimization**: Redis caching reduces database load
-5. **Development Friendly**: Clear separation makes it easy to understand and maintain
-
-This project demonstrates enterprise-grade read scaling patterns that can be adapted for production use. The architecture ensures high availability, performance, and data consistency while maintaining a clean, maintainable codebase.
+The API documentation is available at `http://localhost:5291/swagger` for interactive testing.

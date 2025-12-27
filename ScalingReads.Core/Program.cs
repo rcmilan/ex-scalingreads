@@ -34,10 +34,6 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
-
-    using var scope = app.Services.CreateScope();
-    var masterDb = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    masterDb.Database.Migrate();
 }
 
 app.UseHttpsRedirection();

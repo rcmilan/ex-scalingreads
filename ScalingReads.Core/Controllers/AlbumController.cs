@@ -1,4 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using ScalingReads.Core.Configurations;
 using ScalingReads.Core.Data;
 using ScalingReads.Core.IO;
 using ScalingReads.Core.Models;
@@ -31,5 +33,20 @@ public class AlbumController : ControllerBase
         var result = new PostAlbumOutput(newAlbum.Id);
 
         return Ok(result);
+    }
+
+    [HttpGet("{id}")]
+    [Cache(ttlSeconds: 120)]
+    public async Task<ActionResult<GetAlbumOutput>> Get([FromServices] ReadOnlyDbContext dbContext, [FromRoute] int id)
+    {
+        var album = await dbContext.Albums
+            .Where(a => a.Id == id)
+            .Select(a => new GetAlbumOutput(
+                a.Id,
+                a.Title,
+                a.Songs.Select(s => new GetAlbumSongOutput(s.Title)).ToList()
+            )).FirstOrDefaultAsync();
+
+        return Ok(album);
     }
 }

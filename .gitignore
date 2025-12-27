@@ -482,6 +482,3 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
-
-# Necessário para não fazer commit do banco inteiro
-volumes*

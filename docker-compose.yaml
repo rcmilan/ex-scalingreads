@@ -13,28 +13,38 @@ services:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin_password
       POSTGRES_DB: appdb
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=trust"
     volumes:
-      - ./master/init-master.sh:/docker-entrypoint-initdb.d/init-master.sh:ro
-      - ./master/pg_hba.conf:/master-pg_hba.conf:ro
-      - ./volumes/master:/var/lib/postgresql/data
+      - master_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
+    command: >
+      postgres
+      -c listen_addresses='*'
+      -c wal_level=replica
+      -c max_wal_senders=10
+      -c max_replication_slots=10
     healthcheck:
-      test: ["CMD-SHELL","pg_isready -U admin -d appdb"]
-      interval: 3s
+      test: ["CMD-SHELL", "pg_isready -U admin -d appdb"]
+      interval: 5s
+      timeout: 5s
       retries: 10
-
+      
   pg-replica-1:
     image: postgres:18-alpine
     container_name: pg-replica-1
     restart: always
     environment:
-      POSTGRES_PASSWORD: admin_password
+      - PGPASSWORD=repl_password
+      - MASTER_PASSWORD=admin_password
     depends_on:
-      - pg-master
+      pg-master:
+        condition: service_healthy
     volumes:
-      - ./replica/init-replica.sh:/docker-entrypoint-initdb.d/init-replica.sh:ro
-      - ./volumes/replica1:/var/lib/postgresql/data
+      - replica1_data:/var/lib/postgresql/data
+      - ./replica.sh:/usr/local/bin/replica.sh
+    entrypoint: ["sh", "/usr/local/bin/replica.sh"]
     ports:
       - "5433:5432"
 
@@ -43,11 +53,19 @@ services:
     container_name: pg-replica-2
     restart: always
     environment:
-      POSTGRES_PASSWORD: admin_password
+      - PGPASSWORD=repl_password
+      - MASTER_PASSWORD=admin_password
     depends_on:
-      - pg-master
+      pg-master:
+        condition: service_healthy
     volumes:
-      - ./replica/init-replica.sh:/docker-entrypoint-initdb.d/init-replica.sh:ro
-      - ./volumes/replica2:/var/lib/postgresql/data
+      - replica2_data:/var/lib/postgresql/data
+      - ./replica.sh:/usr/local/bin/replica.sh
+    entrypoint: ["sh", "/usr/local/bin/replica.sh"]
     ports:
       - "5434:5432"
+
+volumes:
+  master_data:
+  replica1_data:
+  replica2_data:

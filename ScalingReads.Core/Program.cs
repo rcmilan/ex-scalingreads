@@ -20,8 +20,8 @@ builder.Services.AddDbContext<ReadOnlyDbContext>(options => options.UseNpgsql(re
 
 builder.Services.AddStackExchangeRedisCache(options =>
 {
-    options.Configuration = builder.Configuration.GetConnectionString("RedisConnection");
-    options.InstanceName = "ScalingReads_";
+    options.Configuration = "localhost:6379";
+    options.InstanceName = "app-cache:";
 });
 
 builder.Services.AddControllers();
